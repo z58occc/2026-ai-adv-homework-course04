@@ -103,7 +103,8 @@ router.get('/', (req, res) => {
     params.push(status);
   }
 
-  querySql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  // created_at 只有秒級精度，加 rowid 作次要排序鍵，同秒訂單分頁時順序才穩定
+  querySql += ' ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?';
 
   const total = db.prepare(countSql).get(...params).count;
   const orders = db.prepare(querySql).all(...params, limit, offset);

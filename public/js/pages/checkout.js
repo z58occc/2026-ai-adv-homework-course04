@@ -54,10 +54,10 @@ createApp({
           body: JSON.stringify(form.value)
         });
         Notification.show('訂單已建立，正在前往付款...', 'success');
+        // 成功後頁面即將導向付款頁，保持 submitting 為 true，避免導頁完成前重複送出
         window.location.href = '/ecpay/payment/' + res.data.id;
       } catch (err) {
         Notification.show(err?.data?.message || '訂單建立失敗', 'error');
-      } finally {
         submitting.value = false;
       }
     }

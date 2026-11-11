@@ -1,7 +1,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const jwt = require('jsonwebtoken');
 const db = require('../database');
+const { resolveUserFromToken, unauthorized } = require('../middleware/authMiddleware');
 const { parsePositiveInteger } = require('../utils/validators');
 
 const router = express.Router();
@@ -10,29 +10,14 @@ const router = express.Router();
 function dualAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
-
-      const user = db.prepare('SELECT id FROM users WHERE id = ?').get(decoded.userId);
-      if (!user) {
-        return res.status(401).json({
-          data: null,
-          error: 'UNAUTHORIZED',
-          message: '使用者不存在，請重新登入'
-        });
-      }
-
-      req.user = { userId: decoded.userId, email: decoded.email, role: decoded.role };
-      return next();
-    } catch (err) {
-      // If Authorization header is present but token is invalid, return 401 immediately
-      return res.status(401).json({
-        data: null,
-        error: 'UNAUTHORIZED',
-        message: 'Token 無效或已過期'
-      });
+    // If Authorization header is present but token is invalid, return 401 immediately
+    const { user, error } = resolveUserFromToken(authHeader.split(' ')[1]);
+    if (error) {
+      return unauthorized(res, error);
     }
+
+    req.user = user;
+    return next();
   }
 
   if (req.sessionId) {
@@ -285,7 +270,7 @@ router.post('/', dualAuth, (req, res) => {
  *                 message:
  *                   type: string
  *       400:
- *         description: 庫存不足
+ *         description: quantity 不是正整數（VALIDATION_ERROR）或庫存不足（STOCK_INSUFFICIENT）
  *       404:
  *         description: 購物車項目不存在
  */
@@ -293,9 +278,9 @@ router.patch('/:itemId', dualAuth, (req, res) => {
   const { itemId } = req.params;
   const { quantity } = req.body;
 
-  const qty = Number(quantity);
-  if (Number.isNaN(qty)) {
-    return res.status(400).json({ data: null, error: 'VALIDATION_ERROR', message: 'quantity 必須為數字' });
+  const qty = parsePositiveInteger(quantity);
+  if (qty === null) {
+    return res.status(400).json({ data: null, error: 'VALIDATION_ERROR', message: 'quantity 必須為正整數' });
   }
 
   const owner = getOwnerCondition(req);

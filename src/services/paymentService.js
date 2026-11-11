@@ -12,8 +12,13 @@ function isTradePaid(order, tradeInfo, config = ECPAY_CONFIG) {
     return false;
   }
 
-  if (tradeInfo.CheckMacValue && !verifyCheckMacValue(tradeInfo, config.hashKey, config.hashIV)) {
-    throw new Error('QueryTradeInfo CheckMacValue mismatch');
+  // 已付款的回應必須帶簽章且驗證通過；缺少 CheckMacValue 也視為驗證失敗
+  if (!tradeInfo.CheckMacValue || !verifyCheckMacValue(tradeInfo, config.hashKey, config.hashIV)) {
+    throw new Error('QueryTradeInfo CheckMacValue missing or mismatch');
+  }
+
+  if (tradeInfo.MerchantID !== config.merchantId) {
+    throw new Error('QueryTradeInfo MerchantID mismatch');
   }
 
   if (tradeInfo.MerchantTradeNo !== order.merchant_trade_no) {

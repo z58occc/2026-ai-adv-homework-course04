@@ -13,10 +13,10 @@
 ## 執行指令
 
 ```bash
-# 單元與 API 測試（7 個檔案、55 項測試）
+# 單元與 API 測試（7 個檔案、105 項測試）
 npm run test:unit
 
-# 結帳、訂單、DB、庫存、回滾與綠界整合測試（10 項測試）
+# 結帳、訂單、DB、庫存、回滾與綠界整合測試（16 項測試）
 npm run test:integration
 
 # 已另行啟動 http://localhost:3001 後，執行真實付款 E2E
@@ -135,12 +135,12 @@ Integration Test 中有兩層防護：
 
 | 檔案 | 範圍 |
 |------|------|
-| `tests/shipping.test.js` | Shipping 純函式、門檻與附加費 |
-| `tests/auth.test.js` | 註冊、登入、重複 Email、個人資料、非字串欄位、JSON 格式錯誤 |
+| `tests/shipping.test.js` | Shipping 純函式、免運門檻邊界（1,499／1,500／1,501，宅配與超商）、附加費、非整數小計 |
+| `tests/auth.test.js` | 註冊、登入、重複 Email、個人資料、非字串欄位、JSON 格式錯誤、JWT 驗證（role 以 DB 為準、降權、已刪除使用者、錯誤密鑰、`alg:none`、過期、無效 token 不退回 session） |
 | `tests/products.test.js` | 商品列表、分頁、詳情與 404 |
-| `tests/cart.test.js` | 訪客/會員購物車 CRUD、數量驗證、登入/註冊時合併訪客購物車（含庫存上限） |
-| `tests/orders.test.js` | 建單、配送費、查詢與認證、模擬付款僅限測試環境 |
-| `tests/adminProducts.test.js` | 後台商品 CRUD 與權限、刪除仍在購物車中的商品、名稱驗證 |
+| `tests/cart.test.js` | 訪客/會員購物車 CRUD、POST／PATCH 數量驗證（0、負數、小數、字串、陣列等）、超庫存、他人品項 404、無身分 401、登入/註冊時合併訪客購物車（含庫存上限） |
+| `tests/orders.test.js` | 建單（固定商品、寫死期望金額）、免運邊界、輸入驗證、他人訂單 404（詳情／付款／查詢）、`/pay` 原型鍵與 fail 路徑、庫存邊界、髒資料防線、trim 與長度上限、模擬付款僅限測試環境 |
+| `tests/adminProducts.test.js` | 後台商品 CRUD 與權限、刪除仍在購物車中的商品、pending 訂單中的商品不可刪（409）、名稱驗證 |
 | `tests/adminOrders.test.js` | 後台訂單列表、詳情與篩選 |
 
 `tests/setup.js` 提供 `app`、`request`、`getAdminToken()` 與 `registerUser()` 等共用輔助。其中 `app` 來自 `tests/setup/testServer.js`，是已在 `127.0.0.1` 啟動的測試伺服器；新增 API 測試時請沿用，不要直接 `require('../app')`，否則在 macOS 上可能連到同埠的其他程式而隨機失敗。
@@ -161,7 +161,10 @@ Integration Test 中有兩層防護：
 | transaction 回滾 | 臨時 SQLite trigger 使第二筆品項寫入失敗，驗證訂單/品項/庫存/購物車全數回滾 |
 | ECPay AIO 表單 | staging action、MerchantTradeNo、TotalAmount、ItemName、URL 與 CheckMacValue |
 | QueryTradeInfo | mock 已付（附有效 CheckMacValue）、未付、HTTP 錯誤；驗證 API 與 DB 狀態 |
-| QueryTradeInfo 驗證 | 簽章遭竄改、金額不符的「已付」回應皆回 500，訂單維持 pending |
+| QueryTradeInfo 驗證 | 簽章遭竄改、缺少簽章、金額不符、`MerchantTradeNo` 或 `MerchantID` 不符的「已付」回應皆回 500，訂單維持 pending |
+| 付款冪等與歸屬 | 已付款訂單再次查詢不再呼叫綠界；他人查詢回 404 且不呼叫綠界 |
+| 免運邊界 | 商品 1,499／1,500／1,501 元，驗證 DB 內 `shipping_fee`、`total_amount` |
+| 庫存競爭 | 以臨時 trigger 讓扣庫存不生效，驗證回 400 `STOCK_INSUFFICIENT` 且整筆回滾 |
 
 ### 成功建單資料
 
@@ -178,7 +181,7 @@ stock        = 10 - 2 = 8
 
 `tests/integration/helpers.js` 於每個測試前後：
 
-1. 移除臨時 rollback trigger。
+1. 移除臨時 trigger（rollback、忽略扣庫存）。
 2. 依 foreign key 順序清除 `order_items`、`orders`、`cart_items`、`products`、`users`。
 3. 建立測試專屬商品；會員由註冊 API 建立。
 4. `afterEach` 還原 fetch、console spy 等 Vitest mock。

@@ -19,18 +19,35 @@ describe('Shipping module', () => {
   });
 
   describe('滿額免基本運費', () => {
-    it('商品小計 1,499 元時仍收基本運費', () => {
-      const result = calculateShipping({ subtotal: 1499, method: HOME_DELIVERY });
+    // 門檻邊界：1,499 收費、1,500 剛好免運、1,501 免運；兩種配送方式各驗一次
+    // 欄位順序配合標題的 %s %i %s %i，method 放最後不參與標題
+    it.each([
+      ['宅配', 0, false, 120, HOME_DELIVERY],
+      ['宅配', 1499, false, 120, HOME_DELIVERY],
+      ['宅配', 1500, true, 0, HOME_DELIVERY],
+      ['宅配', 1501, true, 0, HOME_DELIVERY],
+      ['超商取貨', 1499, false, 60, CONVENIENCE_STORE],
+      ['超商取貨', 1500, true, 0, CONVENIENCE_STORE],
+      ['超商取貨', 1501, true, 0, CONVENIENCE_STORE]
+    ])('%s商品小計 %i 元：免運 %s、運費 %i 元', (_label, subtotal, expectedFree, expectedFee, method) => {
+      const result = calculateShipping({ subtotal, method });
 
-      expect(result.qualifiesForFreeShipping).toBe(false);
-      expect(result.shippingFee).toBe(120);
+      expect(result.qualifiesForFreeShipping).toBe(expectedFree);
+      expect(result.shippingFee).toBe(expectedFee);
+      expect(result.totalAmount).toBe(subtotal + expectedFee);
     });
 
-    it.skip('商品小計 1,500 元時免基本運費', () => {
-      const result = calculateShipping({ subtotal: 1500, method: HOME_DELIVERY });
+    it('商品小計剛好 1,500 元時免基本運費，但仍收附加費', () => {
+      const result = calculateShipping({
+        subtotal: 1500,
+        method: HOME_DELIVERY,
+        isRemoteArea: true,
+        isExpress: true
+      });
 
-      expect(result.qualifiesForFreeShipping).toBe(true);
-      expect(result.shippingFee).toBe(0);
+      expect(result.baseFee).toBe(0);
+      expect(result.shippingFee).toBe(450);
+      expect(result.totalAmount).toBe(1950);
     });
 
     it.each([
@@ -84,6 +101,9 @@ describe('Shipping module', () => {
   describe('輸入驗證', () => {
     it.each([
       ['負數小計', { subtotal: -1, method: HOME_DELIVERY }],
+      ['小數小計', { subtotal: 1499.5, method: HOME_DELIVERY }],
+      ['非數字小計', { subtotal: '1500', method: HOME_DELIVERY }],
+      ['NaN 小計', { subtotal: NaN, method: HOME_DELIVERY }],
       ['不支援的配送方式', { subtotal: 1000, method: 'drone' }],
       ['非 boolean 的條件旗標', { subtotal: 1000, method: HOME_DELIVERY, isRemoteArea: 1 }]
     ])('拒絕%s', (_label, input) => {

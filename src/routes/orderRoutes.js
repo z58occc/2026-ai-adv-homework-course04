@@ -4,6 +4,7 @@ const authMiddleware = require('../middleware/authMiddleware');
 const { queryTradeInfo } = require('../utils/ecpay');
 const { SHIPPING_METHODS, calculateShipping } = require('../utils/shipping');
 const {
+  StockInsufficientError,
   serializeOrder,
   findOrderById,
   findOrderForUser,
@@ -12,10 +13,13 @@ const {
   getOrderItemSummaries,
   getCheckoutItems,
   findInsufficientItems,
+  findInvalidQuantityItems,
   createOrderFromCart
 } = require('../services/orderService');
 const { isTradePaid, markOrderPaid } = require('../services/paymentService');
 const { isNonEmptyString } = require('../utils/validators');
+
+const RECIPIENT_LIMITS = Object.freeze({ name: 100, email: 254, address: 200 });
 
 const router = express.Router();
 
@@ -108,7 +112,7 @@ function testEnvOnly(req, res, next) {
  *                 message:
  *                   type: string
  *       400:
- *         description: 購物車為空或庫存不足或收件資訊缺失
+ *         description: 購物車為空、庫存不足、購物車含無效數量或收件資訊缺失／過長
  */
 router.post('/', (req, res) => {
   const {
@@ -138,6 +142,24 @@ router.post('/', (req, res) => {
     });
   }
 
+  // 儲存的是 trim 後的值，並限制長度避免塞入超大字串
+  const recipient = {
+    name: recipientName.trim(),
+    email: recipientEmail.trim(),
+    address: recipientAddress.trim()
+  };
+  if (
+    recipient.name.length > RECIPIENT_LIMITS.name ||
+    recipient.email.length > RECIPIENT_LIMITS.email ||
+    recipient.address.length > RECIPIENT_LIMITS.address
+  ) {
+    return res.status(400).json({
+      data: null,
+      error: 'VALIDATION_ERROR',
+      message: `收件人姓名、Email、地址長度上限分別為 ${RECIPIENT_LIMITS.name}、${RECIPIENT_LIMITS.email}、${RECIPIENT_LIMITS.address} 字`
+    });
+  }
+
   if (!Object.values(SHIPPING_METHODS).includes(shippingMethod)) {
     return res.status(400).json({
       data: null,
@@ -164,6 +186,15 @@ router.post('/', (req, res) => {
     });
   }
 
+  // 防線：購物車內若有非正整數數量（例如舊資料），不可依此計價建單
+  if (findInvalidQuantityItems(cartItems).length > 0) {
+    return res.status(400).json({
+      data: null,
+      error: 'VALIDATION_ERROR',
+      message: '購物車內含無效的商品數量，請重新調整數量'
+    });
+  }
+
   const insufficientItems = findInsufficientItems(cartItems);
   if (insufficientItems.length > 0) {
     const names = insufficientItems.map(i => i.product_name).join(', ');
@@ -185,14 +216,27 @@ router.post('/', (req, res) => {
     isExpress
   });
 
-  const orderId = createOrderFromCart({
-    userId,
-    recipient: { name: recipientName, email: recipientEmail, address: recipientAddress },
-    delivery: { method: shippingMethod, isRemoteArea, isExpress },
-    cartItems,
-    subtotal,
-    shipping
-  });
+  let orderId;
+  try {
+    orderId = createOrderFromCart({
+      userId,
+      recipient,
+      delivery: { method: shippingMethod, isRemoteArea, isExpress },
+      cartItems,
+      subtotal,
+      shipping
+    });
+  } catch (err) {
+    // 庫存在檢查後、扣減前被搶走：transaction 已整筆回滾，回 400 而非 500
+    if (err instanceof StockInsufficientError) {
+      return res.status(400).json({
+        data: null,
+        error: 'STOCK_INSUFFICIENT',
+        message: `以下商品庫存不足：${err.productName}`
+      });
+    }
+    throw err;
+  }
 
   const order = findOrderById(orderId);
   const orderItems = getOrderItemSummaries(orderId);
@@ -345,10 +389,11 @@ router.get('/', (req, res) => {
  *                 message:
  *                   type: string
  *       404:
- *         description: 訂單不存在
+ *         description: 訂單不存在，或該訂單不屬於目前登入的會員
  */
 router.get('/:id', (req, res) => {
-  const order = findOrderById(req.params.id);
+  // 只查自己的訂單；他人訂單一律視為不存在，避免洩漏收件人資料
+  const order = findOrderForUser(req.params.id, req.user.userId);
 
   if (!order) {
     return res.status(404).json({ data: null, error: 'NOT_FOUND', message: '訂單不存在' });
@@ -435,7 +480,7 @@ router.patch('/:id/pay', testEnvOnly, (req, res) => {
   const userId = req.user.userId;
 
   const actionMap = { success: 'paid', fail: 'failed' };
-  if (!action || !actionMap[action]) {
+  if (typeof action !== 'string' || !Object.hasOwn(actionMap, action)) {
     return res.status(400).json({
       data: null,
       error: 'VALIDATION_ERROR',
@@ -518,13 +563,14 @@ router.post('/:id/check-payment', async (req, res) => {
     const result = await queryTradeInfo(order.merchant_trade_no);
 
     if (isTradePaid(order, result)) {
-      markOrderPaid(order.id);
+      // 若同時間已被改成其他狀態，markOrderPaid 不會更新；以資料庫現況回應，不誤報付款成功
+      const marked = markOrderPaid(order.id);
       const updated = findOrderById(order.id);
       const items = getOrderItemSummaries(order.id);
       return res.json({
         data: { ...serializeOrder(updated), items },
         error: null,
-        message: '付款成功'
+        message: marked || updated.status === 'paid' ? '付款成功' : '此訂單付款失敗'
       });
     }
 

@@ -28,7 +28,7 @@
 ├── src/
 │   ├── database.js                 # 資料庫初始化：建表、WAL 模式、foreign keys、種子資料（admin + 8 個花卉商品）
 │   ├── middleware/
-│   │   ├── authMiddleware.js       # JWT 驗證：解析 Bearer token → jwt.verify → 查 DB 確認用戶存在 → 設定 req.user
+│   │   ├── authMiddleware.js       # JWT 驗證：解析 Bearer token → jwt.verify → 查 DB 取得 email／role → 設定 req.user；並匯出 resolveUserFromToken 供 dualAuth 共用
 │   │   ├── adminMiddleware.js      # 管理員權限檢查：req.user.role === 'admin'，否則 403
 │   │   ├── sessionMiddleware.js    # 提取 X-Session-Id header → 設定 req.sessionId（訪客購物車用）
 │   │   └── errorHandler.js         # 全域錯誤處理：依狀態碼對應錯誤碼與安全訊息，500 一律回「伺服器內部錯誤」
@@ -109,7 +109,7 @@
     │   ├── coupon.test.js           # Issue A：結帳優惠碼
     │   ├── cancel-order.test.js     # Issue B：取消未付款訂單並回補庫存
     │   └── order-filter.test.js     # Issue C：我的訂單篩選與分頁
-    ├── shipping.test.js            # Shipping 模組單元測試（13 項）
+    ├── shipping.test.js            # Shipping 模組單元測試（22 項）
     ├── auth.test.js                # 認證 API 測試
     ├── products.test.js            # 商品 API 測試
     ├── cart.test.js                # 購物車 API 測試
@@ -287,8 +287,8 @@ server.js
 - **驗證流程**：
   1. 檢查 `Authorization` header 是否存在且以 `Bearer ` 開頭
   2. 提取 token，呼叫 `jwt.verify()` 驗證簽章與過期時間
-  3. 查詢資料庫確認 `userId` 對應的使用者仍然存在
-  4. 設定 `req.user = { userId, email, role }`
+  3. 查詢資料庫確認 `userId` 對應的使用者仍然存在，並讀取其目前的 `email`、`role`
+  4. 設定 `req.user = { userId, email, role }`（`email`、`role` 以資料庫為準，不信任 token 內的值，因此管理員被降權或帳號被刪除後，舊 token 立即失效）
 - **失敗回應**：401，訊息依情境為「請先登入」/「Token 無效或已過期」/「使用者不存在，請重新登入」
 
 ### 管理員授權（adminMiddleware）
@@ -303,7 +303,7 @@ server.js
 - **位置**：`src/routes/cartRoutes.js`（路由內部函式）
 - **僅用於**：購物車四個端點
 - **流程**：
-  1. 若有 `Authorization: Bearer <token>` header → 走 JWT 驗證（無效則立即 401）
+  1. 若有 `Authorization: Bearer <token>` header → 走 JWT 驗證（與 authMiddleware 共用 `resolveUserFromToken`，無效則立即 401）
   2. 若無 Bearer token，檢查 `req.sessionId`（由 sessionMiddleware 從 `X-Session-Id` header 提取）
   3. 若兩者皆無 → 401「請提供有效的登入 Token 或 X-Session-Id」
 - **注意**：Session ID 無任何伺服器端驗證或持久化，純粹作為訪客識別用
@@ -440,7 +440,7 @@ server.js
        └─ POST /api/orders/:id/check-payment
             ├─ 呼叫綠界 QueryTradeInfo API（TimeStamp 每次重新產生）
             ├─ TradeStatus === '1'
-            │    ├─ 驗證 CheckMacValue，並核對 MerchantTradeNo 與 TradeAmt
+            │    ├─ 要求回應帶有效 CheckMacValue，並核對 MerchantID、MerchantTradeNo 與 TradeAmt
             │    ├─ 通過 → 更新訂單狀態為 paid（僅限仍為 pending 的訂單）
             │    └─ 不符 → 500 ECPAY_QUERY_ERROR，訂單維持 pending
             └─ 其他 → 回傳「尚未完成付款」

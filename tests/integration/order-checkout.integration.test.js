@@ -432,6 +432,22 @@ describe('Order checkout integration flow', () => {
         MerchantTradeNo: merchantTradeNo,
         TradeAmt: '1',
         TradeStatus: '1'
+      }),
+      // Paid response without any signature must not be trusted
+      `MerchantID=${ECPAY_CONFIG.merchantId}&MerchantTradeNo=${merchantTradeNo}&TradeAmt=${order.total_amount}&TradeStatus=1`,
+      // Valid signature and amount, but it belongs to another order
+      signedTradeInfo({
+        MerchantID: ECPAY_CONFIG.merchantId,
+        MerchantTradeNo: 'ORD00000000AAAAA',
+        TradeAmt: String(order.total_amount),
+        TradeStatus: '1'
+      }),
+      // Valid signature and amount, but it belongs to another merchant
+      signedTradeInfo({
+        MerchantID: '9999999',
+        MerchantTradeNo: merchantTradeNo,
+        TradeAmt: String(order.total_amount),
+        TradeStatus: '1'
       })
     ];
 
@@ -451,5 +467,107 @@ describe('Order checkout integration flow', () => {
       expect(response.body.error).toBe('ECPAY_QUERY_ERROR');
       expect(db.prepare('SELECT status FROM orders WHERE id = ?').get(order.id).status).toBe('pending');
     }
+  });
+
+  it('does not query ECPay again once the order is already paid', async () => {
+    const { token, order } = await createPendingOrder(primaryProduct, 'ecpay-idempotent@example.com');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => signedTradeInfo({
+        MerchantID: ECPAY_CONFIG.merchantId,
+        MerchantTradeNo: order.order_no.replace(/-/g, ''),
+        TradeAmt: String(order.total_amount),
+        TradeStatus: '1'
+      })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = await request(app)
+      .post(`/api/orders/${order.id}/check-payment`)
+      .set('Authorization', `Bearer ${token}`);
+    const second = await request(app)
+      .post(`/api/orders/${order.id}/check-payment`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expectEnvelope(first, 200);
+    expectEnvelope(second, 200);
+    expect(second.body.data.status).toBe('paid');
+    expect(second.body.message).toBe('此訂單已付款');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('only lets the order owner check payment status', async () => {
+    const { order } = await createPendingOrder(primaryProduct, 'ecpay-owner@example.com');
+    const intruder = await registerMember('ecpay-intruder@example.com');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await request(app)
+      .post(`/api/orders/${order.id}/check-payment`)
+      .set('Authorization', `Bearer ${intruder.token}`);
+
+    expectEnvelope(response, 404);
+    expect(response.body.data).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT status FROM orders WHERE id = ?').get(order.id).status).toBe('pending');
+  });
+
+  // 免運門檻 1,500 元（含）：用 DB 實際寫入的金額驗證邊界
+  it.each([
+    [1499, 120],
+    [1500, 0],
+    [1501, 0]
+  ])('persists the right shipping fee for a %i subtotal', async (price, expectedFee) => {
+    const product = createProduct({ name: `免運邊界 ${price}`, price });
+    const member = await registerMember(`boundary-${price}@example.com`);
+    await addProductToCart(member.token, product.id, 1);
+
+    const response = await request(app)
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${member.token}`)
+      .send({
+        ...ORDER_PAYLOAD,
+        shippingMethod: 'home_delivery',
+        isRemoteArea: false,
+        isExpress: false
+      });
+
+    expectEnvelope(response, 201);
+    const stored = db.prepare('SELECT subtotal, shipping_fee, total_amount FROM orders WHERE id = ?')
+      .get(response.body.data.id);
+    expect(stored).toEqual({
+      subtotal: price,
+      shipping_fee: expectedFee,
+      total_amount: price + expectedFee
+    });
+  });
+
+  it('answers 400 and rolls back when stock is taken between the check and the deduction', async () => {
+    const member = await registerMember('stock-race@example.com');
+    await addProductToCart(member.token, primaryProduct.id, 2);
+
+    // 模擬另一個請求搶先扣掉庫存：扣庫存的 UPDATE 不會生效（changes = 0）
+    db.exec(`
+      CREATE TRIGGER integration_ignore_stock_update
+      BEFORE UPDATE OF stock ON products
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END;
+    `);
+
+    const response = await request(app)
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${member.token}`)
+      .send(ORDER_PAYLOAD);
+
+    expectEnvelope(response, 400);
+    expect(response.body.data).toBeNull();
+    expect(response.body.error).toBe('STOCK_INSUFFICIENT');
+    expect(db.prepare('SELECT COUNT(*) AS count FROM orders').get().count).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM order_items').get().count).toBe(0);
+    expect(db.prepare(
+      'SELECT COUNT(*) AS count FROM cart_items WHERE user_id = ?'
+    ).get(member.user.id).count).toBe(1);
   });
 });

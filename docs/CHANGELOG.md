@@ -11,7 +11,26 @@
 - `scripts/generate-postman.js` 產生結果固定，同一份 OpenAPI 重跑不再出現亂數差異
 
 ### Fixed
+- `GET /api/orders/:id` 補上所有權檢查：他人訂單回 404，不再洩漏收件人姓名、Email、地址（與 `/pay`、`/check-payment` 一致）
+- `PATCH /api/cart/:itemId` 改用 `parsePositiveInteger`：`0`、負數、小數、`"1e2"`、`[5]`、`null` 等回 400 `VALIDATION_ERROR`；修正前 `0` 與負數會回 500，小數會以 REAL 寫入並讓訂單金額與庫存失真（可用 `0.0625` 件以約 6% 價格成交）。建單前再檢查一次購物車數量，舊資料中的非整數數量回 400
+- 免運門檻改為 `subtotal >= 1500`：商品小計剛好 1,500 元時，伺服器原本多收 60／120 元，與結帳頁、文件及驗收測試不一致。`calculateShipping` 同時改為只接受非負整數小計
+- `check-payment` 對 `TradeStatus=1` 的回應一律要求帶有效 `CheckMacValue`（原本缺少簽章時會跳過驗證），並新增 `MerchantID` 核對
+- 建單扣庫存改為條件式 `UPDATE ... WHERE stock >= ?`，未生效即中止並整筆回滾，回 400 `STOCK_INSUFFICIENT`；原本多行程下可能以 `CHECK` 失敗回 500
+- `check-payment` 在訂單已被其他流程改成非 pending 時，不再誤報「付款成功」
+- `PATCH /api/orders/:id/pay` 的 `action` 以 `Object.hasOwn` 檢查，`constructor` 等原型鍵回 400，不再回 500
+- 頁面渲染失敗時不再把 `err.message`（含 EJS 檔案路徑）回給瀏覽器，改為記錄於伺服器並回固定訊息
+- 收件人姓名、地址以 trim 後的值儲存，並限制姓名、Email、地址長度上限（100、254、200 字）
+- 我的訂單、後台訂單列表排序加上 `rowid` 作次要鍵，同秒訂單的順序與分頁才穩定
+- 結帳送出成功後不再把 `submitting` 設回 false，避免導向付款頁前重複送出
 - 修正 macOS 上 Vitest 測試隨機失敗（401、200 或逾時）：supertest 自開的臨時伺服器綁在 `::`、卻連到 `127.0.0.1`，可能連到同埠的其他程式。新增 `tests/setup/testServer.js` 先在 `127.0.0.1` 開好伺服器，Unit、Integration 與驗收測試皆改用它
+
+### Security
+- `authMiddleware` 與 `dualAuth` 共用 `resolveUserFromToken`，`email`、`role` 改以資料庫為準，不再信任 JWT payload；管理員被降權或帳號被刪除後，舊 token 立即失效
+
+### Tests
+- 移除 `tests/shipping.test.js` 中被 `it.skip` 的「1,500 元免運」測試並補齊 1,499／1,500／1,501 邊界（宅配與超商）；`tests/orders.test.js` 改用固定商品與寫死的期望金額，空購物車斷言 `CART_EMPTY`
+- 新增購物車 PATCH 數量驗證與所有權、他人訂單（詳情／付款／查詢）404、JWT 偽造與降權、`check-payment` 缺簽章／交易編號或商戶不符、付款冪等、免運邊界（API 與 DB）、庫存競爭回滾、pending 訂單中的商品不可刪除（409）等測試；Unit 由 54 項（另有 1 項 skip）增為 105 項，Integration 由 10 項增為 16 項
+- E2E 的運費斷言改為依規格推算期望值，不再使用永遠成立的 `>= 0`
 
 ## [1.2.0] - 2026-10-06
 

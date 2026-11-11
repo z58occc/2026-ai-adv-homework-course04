@@ -328,7 +328,7 @@
             }
           },
           "400": {
-            "description": "購物車為空或庫存不足或收件資訊缺失"
+            "description": "購物車為空、庫存不足、購物車含無效數量或收件資訊缺失／過長"
           }
         }
       },
@@ -515,7 +515,7 @@
             }
           },
           "404": {
-            "description": "訂單不存在"
+            "description": "訂單不存在，或該訂單不屬於目前登入的會員"
           }
         }
       }
@@ -901,7 +901,7 @@
             }
           },
           "400": {
-            "description": "庫存不足"
+            "description": "quantity 不是正整數（VALIDATION_ERROR）或庫存不足（STOCK_INSUFFICIENT）"
           },
           "404": {
             "description": "購物車項目不存在"

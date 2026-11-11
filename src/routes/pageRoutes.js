@@ -3,10 +3,16 @@ const { buildAioFormHtml } = require('../utils/ecpay');
 const { findOrderById, getOrderItemSummaries } = require('../services/orderService');
 const router = express.Router();
 
+// 渲染失敗時只在伺服器端記錄，不把 EJS 錯誤訊息（含檔案路徑）回給瀏覽器
+function sendRenderError(res, err) {
+  console.error('[Render] failed:', err.message);
+  return res.status(500).send('伺服器內部錯誤');
+}
+
 // Helper to render with front layout
 function renderFront(res, page, locals = {}) {
   res.render('pages/' + page, { layout: 'front', ...locals }, function (err, body) {
-    if (err) return res.status(500).send(err.message);
+    if (err) return sendRenderError(res, err);
     res.render('layouts/front', { body, ...locals });
   });
 }
@@ -14,7 +20,7 @@ function renderFront(res, page, locals = {}) {
 // Helper to render with admin layout
 function renderAdmin(res, page, locals = {}) {
   res.render('pages/admin/' + page, locals, function (err, body) {
-    if (err) return res.status(500).send(err.message);
+    if (err) return sendRenderError(res, err);
     res.render('layouts/admin', { body, ...locals });
   });
 }

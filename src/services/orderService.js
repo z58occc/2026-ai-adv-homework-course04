@@ -1,6 +1,15 @@
 const { v4: uuidv4 } = require('uuid');
 const db = require('../database');
 
+// 扣庫存時發現庫存已不足（檢查與扣減之間被其他請求搶先）
+class StockInsufficientError extends Error {
+  constructor(productName) {
+    super(`庫存不足：${productName}`);
+    this.name = 'StockInsufficientError';
+    this.productName = productName;
+  }
+}
+
 function generateOrderNo() {
   // Use Taipei date so the order number matches ECPay MerchantTradeDate
   const dateStr = new Date()
@@ -30,7 +39,7 @@ function listOrdersForUser(userId) {
   return db.prepare(
     `SELECT id, order_no, subtotal, shipping_fee, shipping_method,
             is_remote_area, is_express, total_amount, status, created_at
-     FROM orders WHERE user_id = ? ORDER BY created_at DESC`
+     FROM orders WHERE user_id = ? ORDER BY created_at DESC, rowid DESC`
   ).all(userId);
 }
 
@@ -59,6 +68,11 @@ function findInsufficientItems(cartItems) {
   return cartItems.filter(item => item.quantity > item.product_stock);
 }
 
+// 數量必須是正整數；小數或 0 會讓金額與庫存計算失真
+function findInvalidQuantityItems(cartItems) {
+  return cartItems.filter(item => !Number.isInteger(item.quantity) || item.quantity <= 0);
+}
+
 /**
  * Create an order from the member's cart in one transaction:
  * insert order → snapshot items → deduct stock → clear cart.
@@ -80,7 +94,10 @@ function createOrderFromCart({ userId, recipient, delivery, cartItems, subtotal,
     `INSERT INTO order_items (id, order_id, product_id, product_name, product_price, quantity)
      VALUES (?, ?, ?, ?, ?, ?)`
   );
-  const updateStock = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ?');
+  // 條件式扣庫存：庫存不足時不更新，由 changes 判斷並中止整筆 transaction
+  const updateStock = db.prepare(
+    'UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?'
+  );
   const clearCart = db.prepare('DELETE FROM cart_items WHERE user_id = ?');
 
   db.transaction(() => {
@@ -102,7 +119,10 @@ function createOrderFromCart({ userId, recipient, delivery, cartItems, subtotal,
 
     for (const item of cartItems) {
       insertItem.run(uuidv4(), orderId, item.product_id, item.product_name, item.product_price, item.quantity);
-      updateStock.run(item.quantity, item.product_id);
+      const deducted = updateStock.run(item.quantity, item.product_id, item.quantity);
+      if (deducted.changes === 0) {
+        throw new StockInsufficientError(item.product_name);
+      }
     }
 
     clearCart.run(userId);
@@ -112,6 +132,7 @@ function createOrderFromCart({ userId, recipient, delivery, cartItems, subtotal,
 }
 
 module.exports = {
+  StockInsufficientError,
   generateOrderNo,
   serializeOrder,
   findOrderById,
@@ -121,5 +142,6 @@ module.exports = {
   getOrderItemSummaries,
   getCheckoutItems,
   findInsufficientItems,
+  findInvalidQuantityItems,
   createOrderFromCart
 };

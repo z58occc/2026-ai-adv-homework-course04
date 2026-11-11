@@ -166,8 +166,10 @@ test('從商店結帳並完成綠界網路 ATM 付款', async ({ page, request, 
     expect(detailResponse.ok()).toBeTruthy();
     const orderBody = await detailResponse.json();
     expect(orderBody).toMatchObject({ error: null, data: { shipping_method: 'home_delivery' } });
-    expect(orderBody.data.shipping_fee).toBeGreaterThanOrEqual(0);
-    expect(orderBody.data.total_amount).toBe(orderBody.data.subtotal + orderBody.data.shipping_fee);
+    // 宅配基本運費 120 元，商品小計滿 1,500 元（含）免運；期望值依規格推算，不直接取用回應值
+    const expectedShippingFee = orderBody.data.subtotal >= 1500 ? 0 : 120;
+    expect(orderBody.data.shipping_fee).toBe(expectedShippingFee);
+    expect(orderBody.data.total_amount).toBe(orderBody.data.subtotal + expectedShippingFee);
   });
 
   await test.step('於綠界測試環境完成網路 ATM 付款', async () => {

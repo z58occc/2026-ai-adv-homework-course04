@@ -97,6 +97,49 @@ describe('Admin Products API', () => {
     expect(cartRes.body.data.items.length).toBe(0);
   });
 
+  it('should refuse to delete a product that is in a pending order, but allow it once paid', async () => {
+    const createRes = await request(app)
+      .post('/api/admin/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: '未完成訂單中的花卉商品', price: 300, stock: 5 });
+    const productId = createRes.body.data.id;
+
+    const { token } = await registerUser();
+    await request(app)
+      .post('/api/cart')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ productId, quantity: 1 });
+    const orderRes = await request(app)
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        recipientName: '刪除測試收件人',
+        recipientEmail: 'delete-test@example.com',
+        recipientAddress: '台北市測試路 1 號',
+        shippingMethod: 'home_delivery',
+        isRemoteArea: false,
+        isExpress: false,
+      });
+    expect(orderRes.status).toBe(201);
+
+    const blocked = await request(app)
+      .delete(`/api/admin/products/${productId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(blocked.status).toBe(409);
+    expect(blocked.body).toHaveProperty('data', null);
+    expect(blocked.body).toHaveProperty('error', 'CONFLICT');
+
+    // 付款後訂單不再是 pending，訂單品項為快照，商品即可刪除
+    await request(app)
+      .patch(`/api/orders/${orderRes.body.data.id}/pay`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ action: 'success' });
+    const allowed = await request(app)
+      .delete(`/api/admin/products/${productId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(allowed.status).toBe(200);
+  });
+
   it('should reject a missing or non-string product name', async () => {
     for (const name of [null, 123, '   ']) {
       const res = await request(app)

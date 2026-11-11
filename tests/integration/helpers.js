@@ -11,6 +11,7 @@ const clearDatabase = db.transaction(() => {
 
 function resetDatabase() {
   db.exec('DROP TRIGGER IF EXISTS integration_fail_second_order_item');
+  db.exec('DROP TRIGGER IF EXISTS integration_ignore_stock_update');
   clearDatabase();
 }
 
