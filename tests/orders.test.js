@@ -342,6 +342,77 @@ describe('Orders API', () => {
     expect(db.prepare('SELECT stock FROM products WHERE id = ?').get(id).stock).toBe(20);
   });
 
+  it.each([
+    ['數字', 123],
+    ['物件', {}],
+    ['陣列', ['FLOWER100']],
+    ['boolean', true]
+  ])('should reject a %s couponCode without touching the cart', async (_label, couponCode) => {
+    const id = await createProduct(`優惠碼型別測試花束 ${_label}`, 1000);
+    const { token } = await registerUser();
+    await addToCart(token, id, 1);
+
+    const res = await placeOrder(token, { couponCode });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('data', null);
+    expect(res.body).toHaveProperty('error', 'VALIDATION_ERROR');
+
+    const cart = await request(app).get('/api/cart').set(auth(token));
+    expect(cart.body.data.items).toHaveLength(1);
+  });
+
+  it.each([
+    ['null', null],
+    ['空字串', ''],
+    ['純空白', '   ']
+  ])('should treat a %s couponCode as no coupon', async (_label, couponCode) => {
+    const id = await createProduct(`未使用優惠碼測試花束 ${_label}`, 1000);
+    const { token } = await registerUser();
+    await addToCart(token, id, 1);
+
+    const res = await placeOrder(token, { couponCode });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({
+      subtotal: 1000,
+      discount: 0,
+      coupon_code: null,
+      shipping_fee: 120,
+      total_amount: 1120
+    });
+  });
+
+  it('should record the coupon and expose it on order detail, order list and admin detail', async () => {
+    const id = await createProduct('優惠碼記錄測試花束', 1000);
+    const { token } = await registerUser();
+    await addToCart(token, id, 1);
+
+    const created = await placeOrder(token, { couponCode: 'spring10' });
+    expect(created.status).toBe(201);
+    // 1,000 元打 9 折折 100 元，折扣後 900 元未達免運：運費 120，總額 1,020
+    expect(created.body.data).toMatchObject({
+      subtotal: 1000,
+      discount: 100,
+      coupon_code: 'SPRING10',
+      shipping_fee: 120,
+      total_amount: 1020
+    });
+
+    const orderId = created.body.data.id;
+    const expected = { subtotal: 1000, discount: 100, coupon_code: 'SPRING10', total_amount: 1020 };
+
+    const detail = await request(app).get(`/api/orders/${orderId}`).set(auth(token));
+    expect(detail.body.data).toMatchObject(expected);
+
+    const list = await request(app).get('/api/orders').set(auth(token));
+    expect(list.body.data.orders.find(order => order.id === orderId)).toMatchObject(expected);
+
+    const adminDetail = await request(app).get(`/api/admin/orders/${orderId}`).set(auth(adminToken));
+    expect(adminDetail.status).toBe(200);
+    expect(adminDetail.body.data).toMatchObject(expected);
+  });
+
   it('should reject non-string recipient fields', async () => {
     const res = await request(app)
       .post('/api/orders')
