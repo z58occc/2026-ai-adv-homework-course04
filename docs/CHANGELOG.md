@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+- 結帳優惠碼（Issue #1）：`POST /api/orders` 可帶 `couponCode`（選填、不分大小寫、每張訂單最多 1 組）。`FLOWER100` 折抵 100 元（商品小計滿 800 元）、`SPRING10` 打 9 折最多折抵 300 元（折扣四捨五入至整數）、`SUMMER50` 已失效。優惠只折抵商品小計，免運門檻以折扣後小計判斷，訂單總額 = 商品小計 − 折扣 + 運費
+- 新增 `src/utils/coupon.js` Coupon 模組：以規則表描述優惠碼，純函式、不依賴 Express 與資料庫，可獨立單元測試
+- `orders` 新增 `discount`（預設 0）與 `coupon_code`（可為 NULL）欄位；既有資料庫啟動時自動補欄位，舊訂單視為未使用優惠碼
+- 建立訂單回應、`GET /api/orders`、`GET /api/orders/:id` 與後台訂單 API 回傳 `discount`、`coupon_code`；無法使用的優惠碼回 400 `INVALID_COUPON`，不建立訂單、不扣庫存、不清空購物車
+- 訂單詳情頁與後台訂單詳情顯示優惠折扣列
+- 新增 `tests/coupon.test.js`（57 項）、訂單 API 與整合測試（含舊資料庫 migration）；驗收測試 `tests/acceptance/coupon.test.js` 通過。Unit 由 105 項增為 170 項，Integration 由 16 項增為 23 項
+
 ### Changed
 - 抽出 `src/services/orderService.js`（訂單查詢、序列化與建單 transaction）與 `src/services/paymentService.js`（QueryTradeInfo 結果判斷與付款狀態更新）
 - 新增 `src/utils/validators.js` 統一路由輸入驗證；Shipping 模組改以規則表描述，單元測試改為 table-driven

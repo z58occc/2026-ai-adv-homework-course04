@@ -60,6 +60,13 @@ router.use(authMiddleware, adminMiddleware);
  *                             type: string
  *                           subtotal:
  *                             type: integer
+ *                           discount:
+ *                             type: integer
+ *                             description: 優惠碼折抵金額，未使用優惠碼為 0
+ *                           coupon_code:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 使用的優惠碼（大寫），未使用為 null
  *                           shipping_fee:
  *                             type: integer
  *                           shipping_method:
@@ -163,6 +170,13 @@ router.get('/', (req, res) => {
  *                       type: string
  *                     subtotal:
  *                       type: integer
+ *                     discount:
+ *                       type: integer
+ *                       description: 優惠碼折抵金額，未使用優惠碼為 0
+ *                     coupon_code:
+ *                       type: string
+ *                       nullable: true
+ *                       description: 使用的優惠碼（大寫），未使用為 null
  *                     shipping_fee:
  *                       type: integer
  *                     shipping_method:

@@ -1,3 +1,8 @@
+const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const Database = require('better-sqlite3');
 const request = require('supertest');
 const app = require('../setup/testServer');
 const {
@@ -569,5 +574,207 @@ describe('Order checkout integration flow', () => {
     expect(db.prepare(
       'SELECT COUNT(*) AS count FROM cart_items WHERE user_id = ?'
     ).get(member.user.id).count).toBe(1);
+  });
+
+  describe('coupon', () => {
+    const HOME_DELIVERY_PAYLOAD = {
+      ...ORDER_PAYLOAD,
+      shippingMethod: 'home_delivery',
+      isRemoteArea: false,
+      isExpress: false
+    };
+
+    async function placeOrderWithCoupon(email, price, couponCode, payload = HOME_DELIVERY_PAYLOAD) {
+      const product = createProduct({ name: `優惠碼測試花束 ${email}`, price, stock: 10 });
+      const member = await registerMember(email);
+      await addProductToCart(member.token, product.id, 1);
+
+      const response = await request(app)
+        .post('/api/orders')
+        .set('Authorization', `Bearer ${member.token}`)
+        .send(couponCode === undefined ? payload : { ...payload, couponCode });
+
+      return { product, member, response };
+    }
+
+    it('persists the coupon, deducts stock and charges ECPay the discounted total', async () => {
+      // 1,600 元 + FLOWER100：折扣後剛好 1,500 元，免基本運費，總額 1,500 元
+      const { product, member, response } = await placeOrderWithCoupon(
+        'coupon-persist@example.com',
+        1600,
+        'flower100'
+      );
+
+      expectEnvelope(response, 201);
+      expect(response.body.data).toMatchObject({
+        subtotal: 1600,
+        discount: 100,
+        coupon_code: 'FLOWER100',
+        shipping_fee: 0,
+        total_amount: 1500
+      });
+
+      const stored = db.prepare(
+        `SELECT subtotal, discount, coupon_code, shipping_fee, total_amount, status
+         FROM orders WHERE id = ?`
+      ).get(response.body.data.id);
+      expect(stored).toEqual({
+        subtotal: 1600,
+        discount: 100,
+        coupon_code: 'FLOWER100',
+        shipping_fee: 0,
+        total_amount: 1500,
+        status: 'pending'
+      });
+
+      // 品項快照維持原價，折扣只記在訂單上
+      const items = db.prepare('SELECT product_price, quantity FROM order_items WHERE order_id = ?')
+        .all(response.body.data.id);
+      expect(items).toEqual([{ product_price: 1600, quantity: 1 }]);
+
+      expect(db.prepare('SELECT stock FROM products WHERE id = ?').get(product.id).stock).toBe(9);
+      expect(db.prepare(
+        'SELECT COUNT(*) AS count FROM cart_items WHERE user_id = ?'
+      ).get(member.user.id).count).toBe(0);
+
+      // 付款表單的金額必須是折扣後的總額
+      const form = await request(app).get(`/ecpay/payment/${response.body.data.id}`);
+      expect(form.status).toBe(200);
+      expect(parseHiddenInputs(form.text).TotalAmount).toBe('1500');
+    });
+
+    it('never discounts shipping or surcharges', async () => {
+      // 超商 60 + 偏遠 200 + 急件 250 = 510；1,000 元 SPRING10 折 100，折扣後 900 元未達免運
+      const { response } = await placeOrderWithCoupon(
+        'coupon-surcharge@example.com',
+        1000,
+        'SPRING10',
+        ORDER_PAYLOAD
+      );
+
+      expectEnvelope(response, 201);
+      expect(response.body.data).toMatchObject({
+        subtotal: 1000,
+        discount: 100,
+        shipping_fee: 510,
+        total_amount: 1000 - 100 + 510
+      });
+    });
+
+    it('records a zero discount and a null coupon code when no coupon is used', async () => {
+      const { response } = await placeOrderWithCoupon('coupon-none@example.com', 1000, undefined);
+
+      expectEnvelope(response, 201);
+      const stored = db.prepare(
+        'SELECT subtotal, discount, coupon_code, total_amount FROM orders WHERE id = ?'
+      ).get(response.body.data.id);
+      expect(stored).toEqual({ subtotal: 1000, discount: 0, coupon_code: null, total_amount: 1120 });
+    });
+
+    it.each([
+      ['不存在的優惠碼', 1000, 'NOT-A-COUPON'],
+      ['已失效的 SUMMER50', 1000, 'SUMMER50'],
+      ['未達門檻的 FLOWER100（799 元）', 799, 'FLOWER100']
+    ])('rejects %s without creating an order, deducting stock or clearing the cart', async (_label, price, couponCode) => {
+      const { product, member, response } = await placeOrderWithCoupon(
+        'coupon-invalid@example.com',
+        price,
+        couponCode
+      );
+
+      expectEnvelope(response, 400);
+      expect(response.body.data).toBeNull();
+      expect(response.body.error).toBe('INVALID_COUPON');
+      expect(response.body.message).toEqual(expect.any(String));
+
+      expect(db.prepare('SELECT COUNT(*) AS count FROM orders').get().count).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS count FROM order_items').get().count).toBe(0);
+      expect(db.prepare('SELECT stock FROM products WHERE id = ?').get(product.id).stock).toBe(10);
+
+      const cartItem = db.prepare(
+        'SELECT quantity FROM cart_items WHERE user_id = ? AND product_id = ?'
+      ).get(member.user.id, product.id);
+      expect(cartItem.quantity).toBe(1);
+    });
+
+    it('migrates an existing database: earlier orders get a zero discount and no coupon code', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coupon-migration-'));
+      const legacyDbPath = path.join(dir, 'before-coupon.sqlite');
+      const databaseModulePath = path.resolve(__dirname, '../../src/database.js');
+
+      try {
+        // 以獨立的暫存 SQLite 建立「優惠碼上線前」的資料庫：orders 沒有 discount、coupon_code，且已有一筆舊訂單
+        const legacy = new Database(legacyDbPath);
+        legacy.exec(`
+          CREATE TABLE users (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('user', 'admin')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          CREATE TABLE orders (
+            id TEXT PRIMARY KEY,
+            order_no TEXT UNIQUE NOT NULL,
+            user_id TEXT NOT NULL,
+            recipient_name TEXT NOT NULL,
+            recipient_email TEXT NOT NULL,
+            recipient_address TEXT NOT NULL,
+            subtotal INTEGER NOT NULL,
+            shipping_fee INTEGER NOT NULL DEFAULT 0,
+            shipping_method TEXT NOT NULL DEFAULT 'home_delivery',
+            is_remote_area INTEGER NOT NULL DEFAULT 0,
+            is_express INTEGER NOT NULL DEFAULT 0,
+            total_amount INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'paid', 'failed')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            merchant_trade_no TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+          );
+          INSERT INTO users (id, email, password_hash, name) VALUES ('legacy-user', 'legacy@example.com', 'x', '舊會員');
+          INSERT INTO orders (
+            id, order_no, user_id, recipient_name, recipient_email, recipient_address,
+            subtotal, shipping_fee, shipping_method, total_amount, status, merchant_trade_no
+          ) VALUES (
+            'legacy-order', 'ORD-20260101-AAAAA', 'legacy-user', '舊收件人', 'old@example.com', '舊地址',
+            1000, 120, 'home_delivery', 1120, 'paid', 'ORD20260101AAAAA'
+          );
+        `);
+        legacy.close();
+
+        // 在子行程載入 database.js 對這個舊資料庫做 migration；連跑兩次，確認重複啟動不會出錯
+        const script = `
+          const db = require(${JSON.stringify(databaseModulePath)});
+          console.log(JSON.stringify({
+            columns: db.prepare('PRAGMA table_info(orders)').all().map(column => column.name),
+            orders: db.prepare(
+              'SELECT id, subtotal, discount, coupon_code, shipping_fee, total_amount, status FROM orders'
+            ).all()
+          }));
+        `;
+
+        for (let run = 0; run < 2; run += 1) {
+          const output = execFileSync(process.execPath, ['-e', script], {
+            env: { ...process.env, NODE_ENV: 'test', DATABASE_PATH: legacyDbPath },
+            encoding: 'utf8'
+          });
+          const result = JSON.parse(output.trim().split('\n').pop());
+
+          expect(result.columns).toEqual(expect.arrayContaining(['discount', 'coupon_code']));
+          expect(result.orders).toEqual([{
+            id: 'legacy-order',
+            subtotal: 1000,
+            discount: 0,
+            coupon_code: null,
+            shipping_fee: 120,
+            total_amount: 1120,
+            status: 'paid'
+          }]);
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });

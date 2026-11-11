@@ -13,10 +13,10 @@
 ## 執行指令
 
 ```bash
-# 單元與 API 測試（7 個檔案、105 項測試）
+# 單元與 API 測試（8 個檔案、170 項測試）
 npm run test:unit
 
-# 結帳、訂單、DB、庫存、回滾與綠界整合測試（16 項測試）
+# 結帳、訂單、DB、庫存、回滾與綠界整合測試（23 項測試）
 npm run test:integration
 
 # 已另行啟動 http://localhost:3001 後，執行真實付款 E2E
@@ -45,7 +45,7 @@ npm run test:acceptance -- coupon       # 只跑檔名包含 coupon 的測試
 
 - 設定檔為 `vitest.acceptance.config.js`，同樣使用記憶體 SQLite。
 - 只透過 HTTP API 驗證，不依賴內部函式名稱或資料表結構；每個測試自建會員與指定價格的商品。
-- 在 Issue 完成前預期失敗，因此不包含在 `test:unit`、`test:integration` 與 CI 中。
+- 在 Issue 完成前預期失敗，因此不包含在 `test:unit`、`test:integration` 與 CI 中。Issue A（`coupon.test.js`）已完成並通過；cancel-order、order-filter 尚未實作，預期失敗。
 
 ## 持續整合（CI）
 
@@ -135,11 +135,12 @@ Integration Test 中有兩層防護：
 
 | 檔案 | 範圍 |
 |------|------|
+| `tests/coupon.test.js` | Coupon 純函式：三組優惠碼、門檻（799／800）、SPRING10 四捨五入與 300 元上限、大小寫與空白、無效／原型鍵、輸入驗證、搭配 Shipping 的免運門檻（折扣後 1,500／1,450） |
 | `tests/shipping.test.js` | Shipping 純函式、免運門檻邊界（1,499／1,500／1,501，宅配與超商）、附加費、非整數小計 |
 | `tests/auth.test.js` | 註冊、登入、重複 Email、個人資料、非字串欄位、JSON 格式錯誤、JWT 驗證（role 以 DB 為準、降權、已刪除使用者、錯誤密鑰、`alg:none`、過期、無效 token 不退回 session） |
 | `tests/products.test.js` | 商品列表、分頁、詳情與 404 |
 | `tests/cart.test.js` | 訪客/會員購物車 CRUD、POST／PATCH 數量驗證（0、負數、小數、字串、陣列等）、超庫存、他人品項 404、無身分 401、登入/註冊時合併訪客購物車（含庫存上限） |
-| `tests/orders.test.js` | 建單（固定商品、寫死期望金額）、免運邊界、輸入驗證、他人訂單 404（詳情／付款／查詢）、`/pay` 原型鍵與 fail 路徑、庫存邊界、髒資料防線、trim 與長度上限、模擬付款僅限測試環境 |
+| `tests/orders.test.js` | 建單（固定商品、寫死期望金額）、`couponCode` 型別驗證與空值、優惠碼記錄於詳情／列表／後台詳情、免運邊界、輸入驗證、他人訂單 404（詳情／付款／查詢）、`/pay` 原型鍵與 fail 路徑、庫存邊界、髒資料防線、trim 與長度上限、模擬付款僅限測試環境 |
 | `tests/adminProducts.test.js` | 後台商品 CRUD 與權限、刪除仍在購物車中的商品、pending 訂單中的商品不可刪（409）、名稱驗證 |
 | `tests/adminOrders.test.js` | 後台訂單列表、詳情與篩選 |
 
@@ -165,6 +166,10 @@ Integration Test 中有兩層防護：
 | 付款冪等與歸屬 | 已付款訂單再次查詢不再呼叫綠界；他人查詢回 404 且不呼叫綠界 |
 | 免運邊界 | 商品 1,499／1,500／1,501 元，驗證 DB 內 `shipping_fee`、`total_amount` |
 | 庫存競爭 | 以臨時 trigger 讓扣庫存不生效，驗證回 400 `STOCK_INSUFFICIENT` 且整筆回滾 |
+| 優惠碼建單 | 1,600 元 + `flower100`：DB 內 `subtotal`、`discount`、`coupon_code`、`total_amount`、庫存、購物車皆正確，ECPay 付款表單 `TotalAmount` 為折扣後的 1,500 |
+| 優惠碼不折抵運費 | 超商 + 偏遠 + 急件（510）搭配 `SPRING10`，折扣只作用在商品小計 |
+| 無效優惠碼 | 不存在、`SUMMER50`、799 元的 `FLOWER100` 皆回 400 `INVALID_COUPON`，訂單、品項、庫存、購物車在 SQL 層皆不變 |
+| 舊資料庫 migration | 以獨立暫存 SQLite 建立沒有 `discount`、`coupon_code` 的舊 `orders`（含一筆舊訂單），子行程載入 `database.js` 後舊訂單 `discount = 0`、`coupon_code = NULL`；重複啟動不出錯 |
 
 ### 成功建單資料
 
