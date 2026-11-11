@@ -267,6 +267,7 @@ server.js
 | `VALIDATION_ERROR` | 400 | 缺少必填欄位、格式不正確、數值超出範圍 |
 | `STOCK_INSUFFICIENT` | 400 | 庫存不足 |
 | `CART_EMPTY` | 400 | 購物車為空，無法建立訂單 |
+| `INVALID_COUPON` | 400 | 優惠碼無效、已失效，或商品小計未達使用門檻；不建立訂單、不扣庫存、不清空購物車 |
 | `INVALID_STATUS` | 400 | 訂單狀態不允許此操作（如非 pending 訂單嘗試付款） |
 | `UNAUTHORIZED` | 401 | 未登入、Token 無效或已過期、使用者不存在 |
 | `FORBIDDEN` | 403 | 權限不足（非管理員存取後台路由） |
@@ -400,7 +401,7 @@ server.js
 ```
 用戶呼叫 POST /api/orders (需 JWT)
 │
-├─ 1. 驗證收件人資訊與配送條件
+├─ 1. 驗證收件人資訊、配送條件與 couponCode 型別
 ├─ 2. 取得用戶購物車所有品項（JOIN products 取得即時價格與庫存）
 ├─ 3. 檢查購物車是否為空 → 400 CART_EMPTY
 ├─ 4. 檢查每個品項庫存是否充足 → 400 STOCK_INSUFFICIENT（列出所有不足商品名稱）

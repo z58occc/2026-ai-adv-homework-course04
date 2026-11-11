@@ -106,7 +106,7 @@ ECPAY_ENV=staging
 `src/database.js` 依 `DATABASE_PATH` 選擇 SQLite：
 
 - 開發/生產未設定：使用專案根目錄 `database.sqlite`。
-- 自動測試：使用 `:memory:`，無實體檔案。
+- 自動測試：使用 `:memory:`，無實體檔案。唯一例外是 Integration Test 中的舊資料庫 migration 測試：它以 `DATABASE_PATH` 指向 `os.tmpdir()` 下的獨立暫存檔（在子行程載入 `database.js`），並於 `finally` 清除，不會碰到專案的 `database.sqlite`。
 
 Integration Test 中有兩層防護：
 

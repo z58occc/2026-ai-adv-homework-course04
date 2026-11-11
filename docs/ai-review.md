@@ -43,7 +43,7 @@
 | M-6 | 需新增相依套件（`express-rate-limit`、`helmet`）並改動登入流程，屬獨立工作 |
 | L-1 | 訂單編號格式在 `FEATURES.md`、`ARCHITECTURE.md` 明文定為 5 碼，改格式是產品決策；可改為撞號時重試 |
 | L-7 ～ L-10、L-12 ～ L-14 | 加固或待確認項目，未納入本次修正 |
-| 第 7 節 Issue A／B／C | 屬新功能實作，不是缺陷修正；`tests/acceptance/` 維持原樣 |
+| 第 7 節 Issue A／B／C | 屬新功能實作，不是缺陷修正；`tests/acceptance/` 維持原樣。**Issue A（優惠碼）已於 PR #2 實作**，B、C 尚未實作 |
 
 ## 1. 結論摘要
 
