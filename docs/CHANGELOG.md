@@ -11,8 +11,14 @@
 - 建立訂單回應、`GET /api/orders`、`GET /api/orders/:id` 與後台訂單 API 回傳 `discount`、`coupon_code`；無法使用的優惠碼回 400 `INVALID_COUPON`，不建立訂單、不扣庫存、不清空購物車
 - 訂單詳情頁與後台訂單詳情顯示優惠折扣列
 - 新增 `tests/coupon.test.js`（57 項）、訂單 API 與整合測試（含舊資料庫 migration）；驗收測試 `tests/acceptance/coupon.test.js` 通過。Unit 由 105 項增為 170 項，Integration 由 16 項增為 23 項
+- 我的訂單篩選與分頁（Issue #4）：`GET /api/orders` 支援 `status`（`pending`、`paid`、`failed`）、`page`（預設 1）、`limit`（預設 10，最大 50，超過以 50 計），格式與後台列表相同；只回傳自己的訂單，依建立時間由新到舊，同秒訂單以 `rowid` 排序，換頁不會重複或遺漏
+- 與後台列表不同，會員列表**拒絕**非法值：`status` 不在允許值內，或 `page`、`limit` 不是正整數（含空字串、陣列、物件）回 400 `VALIDATION_ERROR`；`page` 超過總頁數回 200 與空陣列，且不會因極大的 `page` 造成 SQLite `OFFSET` 溢位而回 500
+- 新增 `src/utils/orderListQuery.js`：解析與驗證訂單列表的查詢參數（純函式）
+- 新增 `tests/orderListQuery.test.js`（55 項）、`tests/orderList.test.js`（35 項）與 6 項整合測試；驗收測試 `tests/acceptance/order-filter.test.js` 通過。Unit 由 170 項增為 260 項，Integration 由 23 項增為 29 項
 
 ### Changed
+- `GET /api/orders` 回應格式變更：原本一次回傳全部訂單，現在改為 `{ data: { orders, pagination: { page, limit, total, totalPages } } }`，預設只回第 1 頁 10 筆；`listOrdersForUser` 改為支援篩選與分頁並回傳 `{ orders, total }`
+- 「我的訂單」頁配合新格式，每頁顯示 10 筆並提供上一頁／下一頁，避免第 10 筆以後的舊訂單看不到；換頁失敗時保留目前這一頁並顯示錯誤訊息，可直接重試（狀態篩選 UI 尚未提供）
 - 抽出 `src/services/orderService.js`（訂單查詢、序列化與建單 transaction）與 `src/services/paymentService.js`（QueryTradeInfo 結果判斷與付款狀態更新）
 - 新增 `src/utils/validators.js` 統一路由輸入驗證；Shipping 模組改以規則表描述，單元測試改為 table-driven
 - `postman_collection.json` 不進版控（列入 `.gitignore`），需要時以 `npm run postman` 產生；路由變更後只需以 `npm run openapi` 同步 `openapi.json`。`docs/TESTING.md` 補上產生與匯入步驟

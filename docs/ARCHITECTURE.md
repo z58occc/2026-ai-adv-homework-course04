@@ -36,6 +36,7 @@
 │   │   ├── ecpay.js                # 綠界 ECPay 工具：CheckMacValue 簽章、URL 編碼、AIO 表單產生、QueryTradeInfo 查詢
 │   │   ├── shipping.js             # 配送費用純邏輯：基本運費、免運門檻、偏遠/急件附加費
 │   │   ├── coupon.js               # 優惠碼純邏輯：規則表、折扣計算、四捨五入與上限、CouponError
+│   │   ├── orderListQuery.js       # 會員訂單列表查詢參數解析：status、page、limit 驗證（非法值拒絕、limit 上限 50）
 │   │   └── validators.js           # 共用輸入驗證：非空字串、選填字串、正整數
 │   ├── services/
 │   │   ├── orderService.js         # 訂單查詢、序列化、訂單編號與建單 transaction（依賴資料庫）
@@ -88,7 +89,7 @@
 │           ├── cart.js             # 購物車頁腳本
 │           ├── checkout.js         # 結帳頁腳本
 │           ├── login.js            # 登入頁腳本
-│           ├── orders.js           # 訂單列表頁腳本
+│           ├── orders.js           # 訂單列表頁腳本（含上一頁／下一頁換頁）
 │           ├── order-detail.js     # 訂單詳情頁腳本
 │           ├── admin-products.js   # 後台商品管理腳本
 │           └── admin-orders.js     # 後台訂單管理腳本
@@ -112,6 +113,8 @@
     │   └── order-filter.test.js     # Issue C：我的訂單篩選與分頁
     ├── shipping.test.js            # Shipping 模組單元測試（22 項）
     ├── coupon.test.js              # Coupon 模組單元測試（57 項）
+    ├── orderListQuery.test.js      # 訂單列表查詢參數解析單元測試（55 項）
+    ├── orderList.test.js           # 訂單列表 API 測試：篩選、分頁、非法參數、跨會員（35 項）
     ├── auth.test.js                # 認證 API 測試
     ├── products.test.js            # 商品 API 測試
     ├── cart.test.js                # 購物車 API 測試
@@ -182,7 +185,7 @@ server.js
 | 方法 | 路徑 | 認證 | 說明 | 檔案 |
 |------|------|------|------|------|
 | POST | `/api/orders` | JWT | 從購物車建立訂單（伺服器重算運費與總額） | orderRoutes.js |
-| GET | `/api/orders` | JWT | 自己的訂單列表 | orderRoutes.js |
+| GET | `/api/orders` | JWT | 自己的訂單列表（狀態篩選 + 分頁，非法參數回 400） | orderRoutes.js |
 | GET | `/api/orders/:id` | JWT | 訂單詳情 | orderRoutes.js |
 | PATCH | `/api/orders/:id/pay` | JWT | 模擬付款（僅 `NODE_ENV=test`，其他環境 404） | orderRoutes.js |
 | POST | `/api/orders/:id/check-payment` | JWT | 查詢綠界付款狀態 | orderRoutes.js |

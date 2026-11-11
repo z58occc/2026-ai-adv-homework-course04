@@ -1,18 +1,20 @@
 <div id="app">
   <h1 class="text-2xl font-bold text-text-primary mb-6" style="font-family: 'Noto Serif TC', serif;">我的訂單</h1>
 
+  <p v-if="errorMessage && !loading" class="mb-4 rounded-xl bg-red-50 text-red-600 text-sm px-4 py-3" role="alert">{{ errorMessage }}</p>
+
   <div v-if="loading" class="flex justify-center py-12">
     <div class="w-8 h-8 border-4 border-rose-primary border-t-transparent rounded-full animate-spin"></div>
   </div>
 
-  <div v-else-if="orders.length === 0" class="text-center py-12">
+  <div v-else-if="orders.length === 0 && !errorMessage" class="text-center py-12">
     <div class="text-4xl mb-3">&#128230;</div>
     <p class="text-text-secondary mb-1">尚無訂單</p>
     <p class="text-text-muted text-sm mb-4">快去選購喜歡的花束吧！</p>
     <a href="/" class="inline-block bg-rose-primary text-white px-6 py-2 rounded-full text-sm hover:bg-rose-dark transition-colors">去逛逛</a>
   </div>
 
-  <div v-else class="space-y-4">
+  <div v-else-if="orders.length > 0" class="space-y-4">
     <a
       v-for="order in orders"
       :key="order.id"
@@ -36,5 +38,21 @@
         </div>
       </div>
     </a>
+
+    <nav v-if="pagination && pagination.totalPages > 1" class="flex items-center justify-center gap-4 pt-2" aria-label="訂單分頁">
+      <button
+        type="button"
+        class="px-4 py-2 rounded-full text-sm border border-gray-200 text-text-secondary hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        :disabled="pagination.page <= 1"
+        @click="loadPage(pagination.page - 1)"
+      >上一頁</button>
+      <span class="text-sm text-text-secondary">第 {{ pagination.page }} / {{ pagination.totalPages }} 頁（共 {{ pagination.total }} 筆）</span>
+      <button
+        type="button"
+        class="px-4 py-2 rounded-full text-sm border border-gray-200 text-text-secondary hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        :disabled="pagination.page >= pagination.totalPages"
+        @click="loadPage(pagination.page + 1)"
+      >下一頁</button>
+    </nav>
   </div>
 </div>
