@@ -5,6 +5,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const request = require('supertest');
 const app = require('../setup/testServer');
+const { listOrdersForUser } = require('../../src/services/orderService');
 const {
   ECPAY_CONFIG,
   generateCheckMacValue,
@@ -775,6 +776,108 @@ describe('Order checkout integration flow', () => {
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('order list pagination', () => {
+    const SAME_SECOND = '2026-01-01 00:00:00';
+
+    // 直接寫入 created_at 完全相同的訂單，確定性地驗證同秒訂單的排序與換頁。
+    // prefix 讓不同會員的訂單 id 與 order_no 不會重複。
+    function insertOrders(userId, count, { prefix = 'tie', statusOf = () => 'pending' } = {}) {
+      const insert = db.prepare(
+        `INSERT INTO orders (
+           id, order_no, user_id, recipient_name, recipient_email, recipient_address,
+           subtotal, total_amount, status, created_at
+         ) VALUES (?, ?, ?, 'n', 'e@example.com', 'addr', 100, 100, ?, ?)`
+      );
+      const ids = [];
+      for (let i = 0; i < count; i += 1) {
+        const serial = String(i).padStart(2, '0');
+        const id = `${prefix}-${serial}`;
+        insert.run(id, `ORD-20260101-${prefix.toUpperCase()}${serial}`, userId, statusOf(i), SAME_SECOND);
+        ids.push(id);
+      }
+      return ids;
+    }
+
+    it('keeps pages stable when many orders share the same created_at', async () => {
+      const member = await registerMember('pagination-ties@example.com');
+      const inserted = insertOrders(member.user.id, 25);
+
+      const pages = [1, 2, 3].map(page => listOrdersForUser(member.user.id, { page, limit: 10 }));
+
+      expect(pages.map(result => result.orders.length)).toEqual([10, 10, 5]);
+      expect(pages.every(result => result.total === 25)).toBe(true);
+      // 同一秒建立：以 rowid 由新到舊，且每筆訂單剛好出現一次
+      expect(pages.flatMap(result => result.orders.map(order => order.id))).toEqual([...inserted].reverse());
+    });
+
+    it('counts and pages only the orders that match the status filter', async () => {
+      const member = await registerMember('pagination-status@example.com');
+      const inserted = insertOrders(member.user.id, 9, {
+        statusOf: i => (i % 3 === 0 ? 'paid' : 'pending')
+      });
+      const paid = inserted.filter((_id, i) => i % 3 === 0); // tie-00、tie-03、tie-06
+
+      const page1 = listOrdersForUser(member.user.id, { status: 'paid', page: 1, limit: 2 });
+      const page2 = listOrdersForUser(member.user.id, { status: 'paid', page: 2, limit: 2 });
+
+      expect(page1.total).toBe(3);
+      expect(page1.orders.map(order => order.id)).toEqual([paid[2], paid[1]]);
+      expect(page2.orders.map(order => order.id)).toEqual([paid[0]]);
+      expect(listOrdersForUser(member.user.id, { status: 'failed' })).toEqual({ orders: [], total: 0 });
+    });
+
+    it("never reads another member's orders, even with the same status filter", async () => {
+      const first = await registerMember('pagination-owner@example.com');
+      const second = await registerMember('pagination-other@example.com');
+      const firstIds = insertOrders(first.user.id, 2, { prefix: 'mine' });
+      insertOrders(second.user.id, 4, { prefix: 'other' });
+
+      const mine = listOrdersForUser(first.user.id, { status: 'pending', page: 1, limit: 50 });
+
+      expect(mine.total).toBe(2);
+      expect(mine.orders.map(order => order.id).sort()).toEqual([...firstIds].sort());
+    });
+
+    it('returns no rows, without querying an out-of-range OFFSET, for a page beyond the end', async () => {
+      const member = await registerMember('pagination-overflow@example.com');
+      insertOrders(member.user.id, 3);
+
+      // 其中 1e20、1e300 乘上 limit 會超出 SQLite 的 int64 範圍，直接當 OFFSET 會出現 SQLITE_MISMATCH；
+      // 較小的值本來就能查，但同樣應回空陣列
+      for (const page of [2, 1e6, Number.MAX_SAFE_INTEGER, 1e20, 1e300]) {
+        expect(listOrdersForUser(member.user.id, { page, limit: 50 })).toEqual({ orders: [], total: 3 });
+      }
+    });
+
+    it('returns at most 50 rows when limit is above 50, not just a capped limit in the response', async () => {
+      const member = await registerMember('pagination-limit-cap@example.com');
+      insertOrders(member.user.id, 52);
+
+      const response = await request(app)
+        .get('/api/orders?limit=100')
+        .set('Authorization', `Bearer ${member.token}`);
+
+      expectEnvelope(response, 200);
+      expect(response.body.data.orders).toHaveLength(50);
+      expect(response.body.data.pagination).toEqual({ page: 1, limit: 50, total: 52, totalPages: 2 });
+    });
+
+    it('serves the orders page with pagination controls wired to the paginated API', async () => {
+      const page = await request(app).get('/orders');
+      expect(page.status).toBe(200);
+      expect(page.type).toBe('text/html');
+      expect(page.text).toContain('aria-label="訂單分頁"');
+      expect(page.text).toContain('上一頁');
+      expect(page.text).toContain('下一頁');
+
+      const script = await request(app).get('/js/pages/orders.js');
+      expect(script.status).toBe(200);
+      expect(script.type).toMatch(/javascript/);
+      expect(script.text).toContain("apiFetch('/api/orders?page=' + page)");
+      expect(script.text).toContain('res.data.pagination');
     });
   });
 });

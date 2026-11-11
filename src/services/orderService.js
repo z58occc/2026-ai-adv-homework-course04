@@ -35,12 +35,29 @@ function findOrderForUser(orderId, userId) {
   return db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(orderId, userId);
 }
 
-function listOrdersForUser(userId) {
-  return db.prepare(
-    `SELECT id, order_no, subtotal, discount, coupon_code, shipping_fee, shipping_method,
-            is_remote_area, is_express, total_amount, status, created_at
-     FROM orders WHERE user_id = ? ORDER BY created_at DESC, rowid DESC`
-  ).all(userId);
+/**
+ * One page of the member's own orders, newest first, optionally filtered by status.
+ * Returns { orders, total } where total counts every order matching the filter.
+ * created_at only has one-second precision, so rowid breaks ties and keeps pages stable.
+ */
+function listOrdersForUser(userId, { status = null, page = 1, limit = 10 } = {}) {
+  // WHERE 片段只在這裡以程式內的常數字串組成，使用者輸入一律走 ? 參數
+  const where = status ? 'WHERE user_id = ? AND status = ?' : 'WHERE user_id = ?';
+  const params = status ? [userId, status] : [userId];
+
+  const { count: total } = db.prepare(`SELECT COUNT(*) AS count FROM orders ${where}`).get(...params);
+
+  // offset 已超過總筆數時不查詢，避免極大的 page 變成超出 SQLite 整數範圍的 OFFSET
+  const offset = (page - 1) * limit;
+  const orders = offset >= total
+    ? []
+    : db.prepare(
+      `SELECT id, order_no, subtotal, discount, coupon_code, shipping_fee, shipping_method,
+              is_remote_area, is_express, total_amount, status, created_at
+       FROM orders ${where} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`
+    ).all(...params, limit, offset);
+
+  return { orders, total };
 }
 
 function getOrderItems(orderId) {

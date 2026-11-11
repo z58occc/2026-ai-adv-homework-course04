@@ -9,13 +9,13 @@
 | 購物車管理 | ✅ 完成 | 雙模式認證（JWT / Session ID），登入時合併訪客購物車 |
 | 配送費用 | ✅ 完成 | 宅配/超商、滿額免基本運費、偏遠/急件附加費 |
 | 優惠碼 | ✅ 完成 | 結帳可帶 `couponCode`（FLOWER100、SPRING10；SUMMER50 已失效），規則集中於 Coupon 模組 |
-| 訂單管理 | ✅ 完成 | 建立、查詢、模擬付款（僅測試環境） |
+| 訂單管理 | ✅ 完成 | 建立、查詢（依狀態篩選、分頁）、模擬付款（僅測試環境） |
 | 綠界金流串接 | ✅ 完成 | ECPay AIO 付款、QueryTradeInfo 查詢驗證 |
 | 後台商品管理 | ✅ 完成 | 商品 CRUD |
 | 後台訂單管理 | ✅ 完成 | 訂單查詢與狀態篩選 |
 | 前台頁面 | ✅ 完成 | EJS + Tailwind CSS |
 | 後台頁面 | ✅ 完成 | EJS + Tailwind CSS |
-| 測試 | ✅ 完成 | 170 項 Unit/API + 23 項 Integration + 1 項綠界真實付款 E2E |
+| 測試 | ✅ 完成 | 260 項 Unit/API + 29 項 Integration + 1 項綠界真實付款 E2E |
 | API 文件 | ✅ 完成 | Swagger/OpenAPI 生成與 Postman Collection 自動轉換 |
 
 ---
@@ -309,9 +309,47 @@
 
 ### GET /api/orders — 訂單列表
 
-**行為描述**：回傳當前使用者的所有訂單，依建立時間降序排列。無分頁。
+**行為描述**：回傳當前使用者**自己的**訂單，可依狀態篩選並分頁，依建立時間由新到舊排序。
 
-**回應欄位**：id, order_no, subtotal, discount, coupon_code, shipping_fee, shipping_method, is_remote_area, is_express, total_amount, status, created_at
+**Query 參數**（皆選填）：
+
+| 參數 | 型別 | 預設值 | 說明 |
+|------|------|--------|------|
+| status | string | 不篩選 | `pending`、`paid`、`failed` 其中之一（區分大小寫） |
+| page | integer | 1 | 頁碼，必須為正整數 |
+| limit | integer | 10 | 每頁筆數，必須為正整數；超過 50 以 50 計 |
+
+**回應格式**（與 `GET /api/admin/orders` 相同）：
+
+```json
+{
+  "data": {
+    "orders": [ { "id": "...", "order_no": "..." } ],
+    "pagination": { "page": 1, "limit": 10, "total": 12, "totalPages": 2 }
+  },
+  "error": null,
+  "message": "成功"
+}
+```
+
+**回應欄位**（`orders` 每一筆）：id, order_no, subtotal, discount, coupon_code, shipping_fee, shipping_method, is_remote_area, is_express, total_amount, status, created_at
+
+**業務邏輯**：
+- 查詢條件含 `user_id`，不論有無篩選或分頁，都不會回傳其他會員的訂單
+- `total` 為**符合篩選條件**的訂單總數，`totalPages = ceil(total / limit)`；沒有訂單時 `total` 與 `totalPages` 皆為 0
+- 排序為 `created_at DESC, rowid DESC`：`created_at` 只有秒級精度，同一秒建立的訂單以 `rowid`（建立先後）排序，換頁時不會重複或遺漏
+- `page` 超過總頁數：回 200 與空陣列，`pagination` 照實回傳。`offset >= total` 時不會送出查詢，因此極大的 `page` 也不會造成 SQLite `OFFSET` 溢位而回 500
+- **與後台列表不同**：後台列表對非法的 `page`、`limit` 會自動修正；會員列表則是**拒絕**非法值（只有 `limit` 超過 50 會被調整為 50）
+- 陣列或物件型別的 query（`?page=1&page=2`、`?status[]=paid`）視為非法
+
+**錯誤情境**：
+
+| 狀態碼 | 錯誤碼 | 情境 |
+|--------|--------|------|
+| 400 | VALIDATION_ERROR | `status` 不在允許值內（含空字串、大小寫不同、重複）；`page` 或 `limit` 不是正整數（`0`、負數、小數、非數字、空字串、科學記號、陣列等） |
+| 401 | UNAUTHORIZED | 未登入或 Token 無效 |
+
+**前端**：「我的訂單」頁每頁顯示 10 筆，並提供上一頁／下一頁；尚未提供狀態篩選 UI。
 
 ### GET /api/orders/:id — 訂單詳情
 
