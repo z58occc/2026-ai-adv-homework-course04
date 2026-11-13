@@ -15,6 +15,7 @@
 - 與後台列表不同，會員列表**拒絕**非法值：`status` 不在允許值內，或 `page`、`limit` 不是正整數（含空字串、陣列、物件）回 400 `VALIDATION_ERROR`；`page` 超過總頁數回 200 與空陣列，且不會因極大的 `page` 造成 SQLite `OFFSET` 溢位而回 500
 - 新增 `src/utils/orderListQuery.js`：解析與驗證訂單列表的查詢參數（純函式）
 - 新增 `tests/orderListQuery.test.js`（55 項）、`tests/orderList.test.js`（35 項）與 6 項整合測試；驗收測試 `tests/acceptance/order-filter.test.js` 通過。Unit 由 170 項增為 260 項，Integration 由 23 項增為 29 項
+- Loop 自動領取驗證（Issue #6）：確認 `/loop` 排程每輪讀取 `.claude/loop.md`，自動領取帶 `ready` 標籤的 Issue 並透過 `/work-issue` 開出 PR；本筆紀錄即為「AI 已讀到該 Issue 並更動專案檔案」的證明，不含任何程式碼或行為變更
 
 ### Changed
 - `GET /api/orders` 回應格式變更：原本一次回傳全部訂單，現在改為 `{ data: { orders, pagination: { page, limit, total, totalPages } } }`，預設只回第 1 頁 10 筆；`listOrdersForUser` 改為支援篩選與分頁並回傳 `{ orders, total }`
